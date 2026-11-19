@@ -30,13 +30,23 @@ def remove_outliers_iqr(df, column):
 
 @st.cache_resource
 def load_and_train_model():
-    # Thu doc file voi nhieu bang ma khac nhau de tranh loi UnicodeDecodeError
-    for enc in ['utf-8', 'latin1', 'cp1252', 'utf-16']:
-        try:
-            df_raw = pd.read_csv('train.csv', encoding=enc)
-            break
-        except Exception:
-            continue
+    df_raw = None
+    # Thu doc duoi dang file Excel truoc (vi file goc thuong la .xlsx doi ten)
+    try:
+        df_raw = pd.read_excel('train.csv', engine='openpyxl')
+    except Exception:
+        # Neu khong phai Excel thi thu lan luot cac bang ma CSV
+        for enc in ['utf-8', 'latin1', 'cp1252', 'utf-16', 'ISO-8859-1']:
+            try:
+                df_raw = pd.read_csv('train.csv', encoding=enc, on_bad_lines='skip')
+                if 'Price' in df_raw.columns:
+                    break
+            except Exception:
+                continue
+                
+    if df_raw is None or 'Price' not in df_raw.columns:
+        st.error("⚠️ Không đọc được dữ liệu từ file train.csv. Hãy kiểm tra lại định dạng file!")
+        st.stop()
             
     df_clean = clean_data(df_raw)
     df_clean = remove_outliers_iqr(df_clean, 'Price')
@@ -111,11 +121,11 @@ if st.button("🔍 DỰ ĐOÁN GIÁ XE NGAY", type="primary", use_container_widt
     input_df = pd.DataFrame([input_data])
     
     for col, le in label_encoders.items():
-        val = str(input_df[col].iloc[0])
+        val = str(input_df[col].iloc)
         input_df[col] = le.transform([val]) if val in le.classes_ else 0
             
     input_df = input_df[features]
-    predicted_price = model.predict(input_df)[0]
+    predicted_price = model.predict(input_df)
     
     st.success("✅ Đã tính toán xong mức giá ước lượng!")
     st.metric(label="Giá xe dự đoán (Predicted Price)", value=f"${predicted_price:,.2f} USD")
