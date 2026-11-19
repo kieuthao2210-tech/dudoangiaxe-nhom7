@@ -4,7 +4,7 @@ import numpy as np
 from sklearn.tree import DecisionTreeRegressor
 from sklearn.preprocessing import LabelEncoder
 
-st.set_page_config(page_title="Dự Đoán Giá Xe Ô Tô - Nhóm 7", page_icon="🚗", layout="wide")
+st.set_page_config(page_title="Du Doan Gia Xe O To - Nhom 7", page_icon="🚗", layout="wide")
 
 def clean_data(df):
     df_clean = df.copy()
@@ -30,7 +30,14 @@ def remove_outliers_iqr(df, column):
 
 @st.cache_resource
 def load_and_train_model():
-    df_raw = pd.read_csv('train.csv')
+    # Thu doc file voi nhieu bang ma khac nhau de tranh loi UnicodeDecodeError
+    for enc in ['utf-8', 'latin1', 'cp1252', 'utf-16']:
+        try:
+            df_raw = pd.read_csv('train.csv', encoding=enc)
+            break
+        except Exception:
+            continue
+            
     df_clean = clean_data(df_raw)
     df_clean = remove_outliers_iqr(df_clean, 'Price')
     df_clean = remove_outliers_iqr(df_clean, 'Mileage')
@@ -108,7 +115,7 @@ if st.button("🔍 DỰ ĐOÁN GIÁ XE NGAY", type="primary", use_container_widt
         input_df[col] = le.transform([val]) if val in le.classes_ else 0
             
     input_df = input_df[features]
-    predicted_price = model.predict(input_df)
+    predicted_price = model.predict(input_df)[0]
     
     st.success("✅ Đã tính toán xong mức giá ước lượng!")
-    st.metric(label="Giá xe dự đoán (Predicted Price)", value=f"${predicted_price[0]:,.2f} USD")
+    st.metric(label="Giá xe dự đoán (Predicted Price)", value=f"${predicted_price:,.2f} USD")
