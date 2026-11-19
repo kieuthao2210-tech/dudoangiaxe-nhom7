@@ -3,8 +3,10 @@ import pandas as pd
 import numpy as np
 from sklearn.tree import DecisionTreeRegressor
 from sklearn.preprocessing import LabelEncoder
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
 
-st.set_page_config(page_title="Du Doan Gia Xe O To - Nhom 7", page_icon="🚗", layout="wide")
+st.set_page_config(page_title="Dự Đoán Giá Xe Ô Tô - Nhóm 7", page_icon="🚗", layout="wide")
 
 def clean_data(df):
     df_clean = df.copy()
@@ -28,26 +30,28 @@ def remove_outliers_iqr(df, column):
     IQR = Q3 - Q1
     return df[(df[column] >= Q1 - 1.5 * IQR) & (df[column] <= Q3 + 1.5 * IQR)]
 
-@st.cache_resource
-def load_and_train_model():
-    df_raw = None
-    # Thu doc duoi dang file Excel truoc (vi file goc thuong la .xlsx doi ten)
+def read_dataset(file_source):
     try:
-        df_raw = pd.read_excel('train.csv', engine='openpyxl')
+        return pd.read_excel(file_source, engine='openpyxl')
     except Exception:
-        # Neu khong phai Excel thi thu lan luot cac bang ma CSV
         for enc in ['utf-8', 'latin1', 'cp1252', 'utf-16', 'ISO-8859-1']:
             try:
-                df_raw = pd.read_csv('train.csv', encoding=enc, on_bad_lines='skip')
-                if 'Price' in df_raw.columns:
-                    break
+                if hasattr(file_source, 'seek'):
+                    file_source.seek(0)
+                df = pd.read_csv(file_source, encoding=enc, on_bad_lines='skip')
+                if len(df.columns) > 1:
+                    return df
             except Exception:
                 continue
-                
+    return None
+
+@st.cache_resource
+def load_and_train_model(max_depth_val):
+    df_raw = read_dataset('train.csv')
     if df_raw is None or 'Price' not in df_raw.columns:
         st.error("⚠️ Không đọc được dữ liệu từ file train.csv. Hãy kiểm tra lại định dạng file!")
         st.stop()
-            
+        
     df_clean = clean_data(df_raw)
     df_clean = remove_outliers_iqr(df_clean, 'Price')
     df_clean = remove_outliers_iqr(df_clean, 'Mileage')
@@ -75,14 +79,68 @@ def load_and_train_model():
     X = df_clean[features]
     y = df_clean['Price']
     
-    model = DecisionTreeRegressor(max_depth=10, random_state=42)
-    model.fit(X, y)
-    return model, label_encoders, raw_options, features, df_raw
+    # Chia tập Train (80%) và Test (20%)
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    
+    # Huấn luyện mô hình Cây quyết định (Decision Tree Regressor)
+    model = DecisionTreeRegressor(max_depth=max_depth_val, random_state=42)
+    model.fit(X_train, y_train)
+    
+    # Đánh giá trên tập Test
+    y_pred_test = model.predict(X_test)
+    r2 = r2_score(y_test, y_pred_test)
+    mae = mean_absolute_error(y_test, y_pred_test)
+    rmse = np.sqrt(mean_squared_error(y_test, y_pred_test))
+    
+    # Tính MAPE (tránh chia cho 0)
+    non_zero_mask = y_test != 0
+    mape = np.mean(np.abs((y_test[non_zero_mask] - y_pred_test[non_zero_mask]) / y_test[non_zero_mask])) * 100
+    
+    metrics = {
+        'R2': r2,
+        'MAE': mae,
+        'RMSE': rmse,
+        'MAPE': mape,
+        'train_size': len(X_train),
+        'test_size': len(X_test)
+    }
+    
+    # Bảng so sánh thực tế vs dự đoán trên tập Test
+    test_comparison = pd.DataFrame({
+        'Giá thực tế (Actual $)': y_test.values,
+        'Giá dự đoán (Predicted $)': np.round(y_pred_test, 2),
+        'Chênh lệch ($)': np.round(np.abs(y_test.values - y_pred_test), 2)
+    }).head(20)
+    
+    return model, label_encoders, raw_options, features, df_raw, metrics, test_comparison
 
-st.title("🚗 Hệ Thống AI Dự Đoán Giá Xe Ô Tô Cũ")
-st.markdown("Mô hình **Decision Tree Regressor** — Thực hiện bởi **Nhóm 7**")
+# --- GIAO DIỆN CHÍNH ---
+st.title("🚗 Hệ Thống Dự Đoán Giá Xe Ô Tô Cũ — Cây Quyết Định")
+st.markdown("Thuật toán: **Decision Tree Regressor** | Tỷ lệ chia dữ liệu: **80% Train — 20% Test** | Thực hiện: **Nhóm 7**")
 
-model, label_encoders, raw_options, features, df_raw = load_and_train_model()
+# Thanh bên điều chỉnh tham số cây quyết định
+st.sidebar.header("🌳 Cấu hình Cây quyết định")
+max_depth = st.sidebar.slider("Độ sâu tối đa của cây (max_depth)", min_value=3, max_value=25, value=10)
+
+model, label_encoders, raw_options, features, df_raw, metrics, test_comparison = load_and_train_model(max_depth)
+
+# --- PHẦN 1: CHỈ SỐ ĐÁNH GIÁ MÔ HÌNH TRÊN TẬP TEST ---
+st.subheader("📊 1. Đánh giá độ chính xác của mô hình trên tập Test")
+st.caption(f"Số mẫu huấn luyện (Train): **{metrics['train_size']:,} xe** | Số mẫu kiểm thử (Test): **{metrics['test_size']:,} xe**")
+
+m1, m2, m3, m4 = st.columns(4)
+m1.metric("Hệ số xác định (R² Score)", f"{metrics['R2']:.4f}", f"{metrics['R2']*100:.2f}%")
+m2.metric("Sai số tuyệt đối TB (MAE)", f"${metrics['MAE']:,.2f}")
+m3.metric("Sai số bình phương TB (RMSE)", f"${metrics['RMSE']:,.2f}")
+m4.metric("Sai số phần trăm TB (MAPE)", f"{metrics['MAPE']:.2f}%")
+
+with st.expander("📋 Xem bảng đối chiếu kết quả trên 20 mẫu đầu của tập Test (80/20)"):
+    st.dataframe(test_comparison, use_container_width=True)
+
+st.markdown("---")
+
+# --- PHẦN 2: DỰ ĐOÁN CHO 1 CHIẾC XE CỤ THỂ ---
+st.subheader("🔍 2. Nhập thông số xe để dự đoán giá")
 
 col1, col2, col3 = st.columns(3)
 
@@ -108,9 +166,7 @@ with col3:
     wheel = st.selectbox("Vị trí vô lăng (Wheel)", raw_options['Wheel'])
     airbags = st.slider("Số túi khí (Airbags)", min_value=0, max_value=16, value=12)
 
-st.markdown("---")
-
-if st.button("🔍 DỰ ĐOÁN GIÁ XE NGAY", type="primary", use_container_width=True):
+if st.button("🚀 DỰ ĐOÁN GIÁ XE NGAY", type="primary", use_container_width=True):
     input_data = {
         'Levy': levy, 'Manufacturer': manufacturer, 'Model': model_car,
         'Prod. year': prod_year, 'Category': category, 'Leather interior': leather,
@@ -121,11 +177,42 @@ if st.button("🔍 DỰ ĐOÁN GIÁ XE NGAY", type="primary", use_container_widt
     input_df = pd.DataFrame([input_data])
     
     for col, le in label_encoders.items():
-        val = str(input_df[col].iloc)
-        input_df[col] = le.transform([val]) if val in le.classes_ else 0
+        val = str(input_df[col].iloc[0])
+        input_df[col] = le.transform([val])[0] if val in le.classes_ else 0
             
     input_df = input_df[features]
-    predicted_price = model.predict(input_df)
+    predicted_price = float(model.predict(input_df)[0])
     
-    st.success("✅ Đã tính toán xong mức giá ước lượng!")
+    st.success("✅ Đã tính toán xong mức giá ước lượng từ Cây quyết định!")
     st.metric(label="Giá xe dự đoán (Predicted Price)", value=f"${predicted_price:,.2f} USD")
+
+st.markdown("---")
+
+# --- PHẦN 3: DỰ ĐOÁN HÀNG LOẠT TỪ FILE TEST NGOÀI ---
+st.subheader("📂 3. Dự đoán hàng loạt từ file tập Test (CSV / Excel)")
+uploaded_test = st.file_uploader("Tải lên file test.csv (hoặc .xlsx) của nhóm để dự đoán toàn bộ", type=['csv', 'xlsx'])
+
+if uploaded_test is not None:
+    df_test_ext = read_dataset(uploaded_test)
+    if df_test_ext is not None:
+        df_test_clean = clean_data(df_test_ext)
+        
+        # Kiểm tra xem có đủ 15 cột đầu vào không
+        missing_cols = [c for c in features if c not in df_test_clean.columns]
+        if missing_cols:
+            st.error(f"⚠️ File tải lên bị thiếu các cột: {', '.join(missing_cols)}")
+        else:
+            X_ext = df_test_clean[features].copy()
+            for col, le in label_encoders.items():
+                X_ext[col] = X_ext[col].astype(str).apply(lambda x: le.transform([x])[0] if x in le.classes_ else 0)
+            
+            preds_ext = model.predict(X_ext)
+            result_df = df_test_ext.copy()
+            result_df['Predicted_Price ($)'] = np.round(preds_ext, 2)
+            
+            # Nếu file test ngoài có sẵn cột Price thực tế thì tính luôn độ chính xác
+            if 'Price' in result_df.columns:
+                y_true_ext = pd.to_numeric(result_df['Price'], errors='coerce').fillna(0)
+                r2_ext = r2_score(y_true_ext, preds_ext)
+                mae_ext = mean_absolute_error(y_true_ext, preds_ext)
+                rmse_ext = np.sqrt(mean_squared_error(y_true_ext, preds_ext))
